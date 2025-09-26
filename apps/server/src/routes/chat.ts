@@ -66,7 +66,10 @@ chatRouter.post('/', async (req, res) => {
 	const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as ProfileRow | undefined;
 	if (!profile) return res.status(404).json({ error: 'Profile not found' });
 
-	const baseUrl = String(profile.api_base_url).replace(/\/$/, '');
+	// Normalize base URL similar to models route to avoid duplicate version segments
+	const rawBaseUrl = String(profile.api_base_url).replace(/\/+$/, '');
+	const alreadyVersioned = /\/(v\d+|openai\/v\d+)$/.test(rawBaseUrl);
+	const baseUrl = `${rawBaseUrl}${alreadyVersioned ? '' : '/v1'}`;
 	const apiKey = String(profile.api_key);
 
 	// Merge default settings with request-level params
@@ -125,15 +128,25 @@ chatRouter.post('/', async (req, res) => {
 	}, include);
 
 	try {
-		const url = `${baseUrl}/v1/chat/completions`;
-		const upstreamResp = await fetch(url, {
-			method: 'POST',
-			headers: {
-				'Authorization': `Bearer ${apiKey}`,
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(reqBody)
-		});
+		// Try common OpenAI-compatible endpoints, falling back if the first 404s
+		const candidatePaths = ['/chat/completions', '/completions'];
+		let upstreamResp: Response | null = null;
+		let url = '';
+		for (const suffix of candidatePaths) {
+			url = `${baseUrl}${suffix}`;
+			upstreamResp = await fetch(url, {
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json',
+					'Accept': merged.stream ? 'text/event-stream' : 'application/json'
+				},
+				body: JSON.stringify(reqBody)
+			});
+			if (upstreamResp.status !== 404) break;
+		}
+		// Safety: if still null, throw generic error
+		if (!upstreamResp) throw new Error('No upstream response');
 
 		// If streaming requested, proxy as SSE to the client
 		if (merged.stream) {
