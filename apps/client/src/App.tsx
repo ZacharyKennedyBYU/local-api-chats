@@ -32,6 +32,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [profileSettings, setProfileSettings] = useState<any>({})
+  const [debugLogs, setDebugLogs] = useState<string[]>([])
 
   useEffect(() => {
     fetch(`${API_BASE()}/api/profiles`).then(r => r.json()).then(setProfiles)
@@ -71,18 +72,123 @@ export default function App() {
     setInput('')
     setImageDataUrl(null)
 
+    const requestBody = {
+      profileId: activeProfileId,
+      conversationId: conversationId ?? undefined,
+      model: undefined,
+      messages: [...messages, outgoing].map(m => ({ role: m.role, content: m.content, parts: m.parts })),
+      params: profileSettings || {}
+    }
+
+    const debugEnabled = Boolean(profileSettings?.debug)
+    if (debugEnabled) {
+      setDebugLogs(prev => [...prev, `[client] POST /api/chat`, JSON.stringify(requestBody, null, 2)])
+    }
+
+    if (profileSettings?.stream) {
+      // Streaming via SSE over fetch
+      try {
+        // Prepare placeholder assistant message
+        setMessages(prev => [...prev, { role: 'assistant', content: '' }])
+        const resp = await fetch(`${API_BASE()}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        })
+        if (!resp.ok || !resp.body) {
+          const text = await resp.text().catch(() => '')
+          if (debugEnabled) setDebugLogs(prev => [...prev, `[client] upstream error ${resp.status}`, text])
+          // remove placeholder and fall back to error assistant message
+          setMessages(prev => {
+            const copy = prev.slice()
+            // replace last assistant placeholder with error
+            const lastIdx = copy.length - 1
+            if (lastIdx >= 0 && copy[lastIdx].role === 'assistant' && (copy[lastIdx].content ?? '') === '') {
+              copy[lastIdx] = { ...copy[lastIdx], content: 'Error: failed to start stream.' }
+            } else {
+              copy.push({ role: 'assistant', content: 'Error: failed to start stream.' })
+            }
+            return copy
+          })
+          return
+        }
+
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let finished = false
+
+        const processBuffer = () => {
+          let sepIndex: number
+          while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+            const eventBlock = buffer.slice(0, sepIndex)
+            buffer = buffer.slice(sepIndex + 2)
+            let eventName: string | null = null
+            const dataLines: string[] = []
+            for (const line of eventBlock.split('\n')) {
+              const trimmed = line.trim()
+              if (trimmed.startsWith('event:')) eventName = trimmed.slice(6).trim()
+              else if (trimmed.startsWith('data:')) dataLines.push(trimmed.slice(5).trim())
+            }
+            const dataStr = dataLines.join('\n')
+            if (debugEnabled) setDebugLogs(prev => [...prev, `[sse] ${eventName || 'message'}`, dataStr])
+            if (eventName === 'meta') {
+              try {
+                const obj = JSON.parse(dataStr)
+                if (obj?.conversationId) setConversationId(obj.conversationId)
+              } catch {}
+            } else if (eventName === 'debug') {
+              // already logged raw above
+            } else if (eventName === 'chunk') {
+              try {
+                const obj = JSON.parse(dataStr)
+                const content = obj?.content || ''
+                if (content) {
+                  setMessages(prev => {
+                    const copy = prev.slice()
+                    // update last assistant message
+                    const lastIdx = copy.length - 1
+                    if (lastIdx >= 0 && copy[lastIdx].role === 'assistant') {
+                      const prevContent = copy[lastIdx].content || ''
+                      copy[lastIdx] = { ...copy[lastIdx], content: prevContent + content }
+                    }
+                    return copy
+                  })
+                }
+              } catch {}
+            } else if (eventName === 'done') {
+              finished = true
+            }
+          }
+        }
+
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          processBuffer()
+          if (finished) break
+        }
+
+        // flush remaining buffer
+        if (buffer) {
+          processBuffer()
+        }
+      } catch (e: any) {
+        if (debugEnabled) setDebugLogs(prev => [...prev, `[client] stream error`, String(e?.message || e)])
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Error: stream interrupted.' }])
+      }
+      return
+    }
+
+    // Non-streaming fallback
     const resp = await fetch(`${API_BASE()}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        profileId: activeProfileId,
-        conversationId: conversationId ?? undefined,
-        model: undefined,
-        messages: [...messages, outgoing].map(m => ({ role: m.role, content: m.content, parts: m.parts })),
-        params: profileSettings || {}
-      })
+      body: JSON.stringify(requestBody)
     })
     const data = await resp.json()
+    if (debugEnabled) setDebugLogs(prev => [...prev, `[client] response`, JSON.stringify(data, null, 2)])
     setConversationId(data.conversationId)
     const assistant = data?.response?.choices?.[0]?.message?.content
     setMessages(prev => [...prev, { role: 'assistant', content: typeof assistant === 'string' ? assistant : '' }])
@@ -153,6 +259,16 @@ export default function App() {
             ))}
           </div>
         </section>
+        {profileSettings?.debug && (
+          <section className="border-t border-[#2A2B32] bg-[#1E1F24] p-3 text-sm font-mono text-[#B0B2C3] max-h-56 overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl">
+              <div className="mb-2 text-[#9B9CA8]">Debug terminal</div>
+              <pre className="whitespace-pre-wrap break-words">
+                {debugLogs.join('\n')}
+              </pre>
+            </div>
+          </section>
+        )}
         <footer className="border-t border-[#2A2B32] bg-[#343541] p-4">
           <div className="max-w-3xl mx-auto">
             <div className="flex items-end gap-2">

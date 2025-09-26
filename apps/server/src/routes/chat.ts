@@ -34,7 +34,9 @@ const ChatRequest = z.object({
 		presence_penalty: z.number().min(-2).max(2).optional(),
 		stream: z.boolean().optional(),
 		include_settings: z.record(z.boolean()).optional(),
-		embed_images_as_base64: z.boolean().optional()
+		embed_images_as_base64: z.boolean().optional(),
+		debug: z.boolean().optional(),
+		system_prompt: z.string().optional()
 	}).default({})
 });
 
@@ -72,8 +74,16 @@ chatRouter.post('/', async (req, res) => {
 	const include = params.include_settings || defaultSettings.include_settings || {};
 	const merged = { ...defaultSettings, ...params };
 
+	// If a system prompt is provided and the first message isn't system, prepend it
+	const withSystem = (() => {
+		if (params.system_prompt && (messages.length === 0 || messages[0].role !== 'system')) {
+			return [{ role: 'system', content: params.system_prompt } as any, ...messages];
+		}
+		return messages;
+	})();
+
 	// Transform messages to support text+image parts using OpenAI Chat API format
-	const apiMessages = await Promise.all(messages.map(async (m) => {
+	const apiMessages = await Promise.all(withSystem.map(async (m) => {
 		if (!m.parts || m.parts.length === 0) {
 			return { role: m.role, content: m.content ?? '' };
 		}
@@ -116,7 +126,7 @@ chatRouter.post('/', async (req, res) => {
 
 	try {
 		const url = `${baseUrl}/v1/chat/completions`;
-		const resp = await fetch(url, {
+		const upstreamResp = await fetch(url, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Bearer ${apiKey}`,
@@ -124,11 +134,104 @@ chatRouter.post('/', async (req, res) => {
 			},
 			body: JSON.stringify(reqBody)
 		});
-		if (!resp.ok) {
-			const text = await resp.text();
-			return res.status(resp.status).json({ error: text });
+
+		// If streaming requested, proxy as SSE to the client
+		if (merged.stream) {
+			if (!upstreamResp.ok || !upstreamResp.body) {
+				const text = await upstreamResp.text().catch(() => '');
+				res.status(upstreamResp.status).json({ error: text || 'Upstream error' });
+				return;
+			}
+
+			// Prepare conversation and persist user messages up-front
+			let convId = conversationId as number | undefined;
+			if (!convId) {
+				const firstUser = messages.find(m => m.role === 'user');
+				const title = (firstUser?.content || '').slice(0, 80) || 'New Chat';
+				const info = db.prepare('INSERT INTO conversations (profile_id, title, model) VALUES (?, ?, ?)')
+					.run(profileId, title, reqBody.model ?? null);
+				convId = Number(info.lastInsertRowid);
+			}
+			const insertMsg = db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)');
+			for (const m of messages) {
+				insertMsg.run(convId!, m.role, m.content);
+			}
+
+			// SSE headers
+			res.setHeader('Content-Type', 'text/event-stream');
+			res.setHeader('Cache-Control', 'no-cache, no-transform');
+			res.setHeader('Connection', 'keep-alive');
+			(res as any).flushHeaders?.();
+
+			const send = (event: string, data: any) => {
+				try {
+					res.write(`event: ${event}\n`);
+					res.write(`data: ${JSON.stringify(data)}\n\n`);
+				} catch {}
+			};
+
+			// Send meta information first
+			send('meta', { conversationId: convId, model: reqBody.model ?? null });
+			if (merged.debug) send('debug', { stage: 'upstream_request', url, body: reqBody });
+
+			const reader = (upstreamResp.body as any).getReader();
+			const decoder = new TextDecoder();
+			let assistantText = '';
+			let buffer = '';
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				let idx;
+				while ((idx = buffer.indexOf('\n\n')) !== -1) {
+					const rawEvent = buffer.slice(0, idx);
+					buffer = buffer.slice(idx + 2);
+					const lines = rawEvent.split('\n').map(l => l.trim());
+					for (const line of lines) {
+						if (!line.startsWith('data:')) continue;
+						const payload = line.slice(5).trim();
+						if (payload === '[DONE]') {
+							// finish
+							break;
+						}
+						try {
+							const obj = JSON.parse(payload);
+							let delta = '';
+							if (Array.isArray(obj?.choices) && obj.choices.length > 0) {
+								const choice = obj.choices[0];
+								if (typeof choice?.delta?.content === 'string') delta = choice.delta.content;
+								else if (typeof choice?.text === 'string') delta = choice.text;
+								else if (typeof choice?.message?.content === 'string') delta = choice.message.content;
+								else if (Array.isArray(choice?.message?.content)) {
+									delta = choice.message.content.map((p: any) => (p?.text ? p.text : '')).join('');
+								}
+							}
+							if (typeof obj?.delta?.content === 'string') delta = obj.delta.content || delta;
+							if (delta) {
+								assistantText += delta;
+								send('chunk', { content: delta });
+							}
+							if (merged.debug) send('debug', { stage: 'upstream_chunk', raw: obj });
+						} catch {
+							if (merged.debug) send('debug', { stage: 'chunk_parse_error', raw: payload });
+						}
+					}
+				}
+			}
+
+			// Save assistant message and finish
+			const insertAssistant = db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)');
+			insertAssistant.run(convId!, 'assistant', assistantText);
+			send('done', { conversationId: convId });
+			return res.end();
 		}
-		const data = await resp.json();
+
+		// Non-streaming path
+		if (!upstreamResp.ok) {
+			const text = await upstreamResp.text();
+			return res.status(upstreamResp.status).json({ error: text });
+		}
+		const data = await upstreamResp.json();
 
 		// Persist conversation and messages
 		let convId = conversationId;

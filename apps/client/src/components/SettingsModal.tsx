@@ -11,6 +11,9 @@ export default function SettingsModal({ open, onClose, initial, onSave }: Props)
   const [temperature, setTemperature] = useState<number | ''>(initial?.temperature ?? '')
   const [maxContext, setMaxContext] = useState<number | ''>(initial?.max_context ?? '')
   const [maxTokens, setMaxTokens] = useState<number | ''>(initial?.max_output_tokens ?? '')
+  const [systemPrompt, setSystemPrompt] = useState<string>(initial?.system_prompt ?? '')
+  const [stream, setStream] = useState<boolean>(Boolean(initial?.stream))
+  const [debug, setDebug] = useState<boolean>(Boolean(initial?.debug))
   const [include, setInclude] = useState<Record<string, boolean>>(
     initial?.include_settings ?? { temperature: true, max_context: true, max_output_tokens: true }
   )
@@ -22,6 +25,16 @@ export default function SettingsModal({ open, onClose, initial, onSave }: Props)
       <div className="bg-[#343541] text-[#ECECF1] rounded-lg shadow-2xl w-full max-w-lg border border-[#2A2B32]">
         <div className="border-b border-[#2A2B32] p-4 font-semibold">Profile Settings</div>
         <div className="p-4 space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm text-[#ECECF1]/80">System prompt</label>
+            <textarea
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              rows={3}
+              placeholder="You are a helpful assistant."
+              className="w-full resize-none rounded-md border border-[#565869] bg-[#40414F] text-[#ECECF1] placeholder-[#9B9CA8] p-2 focus:outline-none focus:ring-1 focus:ring-[#565869]"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-4 items-end">
             <label className="text-sm text-[#ECECF1]/80">Temperature</label>
             <div className="flex items-center gap-2">
@@ -45,10 +58,22 @@ export default function SettingsModal({ open, onClose, initial, onSave }: Props)
               </label>
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-4 items-center">
+            <label className="text-sm text-[#ECECF1]/80">Streaming</label>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" className="accent-[#10a37f]" checked={stream} onChange={e => setStream(e.target.checked)} />
+              <span className="text-xs text-[#9B9CA8]">If enabled, responses stream token-by-token</span>
+            </div>
+            <label className="text-sm text-[#ECECF1]/80">Debug mode</label>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" className="accent-[#10a37f]" checked={debug} onChange={e => setDebug(e.target.checked)} />
+              <span className="text-xs text-[#9B9CA8]">Show a request log terminal</span>
+            </div>
+          </div>
         </div>
         <div className="border-t border-[#2A2B32] p-4 flex justify-end gap-2">
           <button className="px-3 py-2 rounded-md border border-[#565869] bg-[#40414F] text-[#ECECF1] hover:bg-[#4A4B57] transition" onClick={onClose}>Cancel</button>
-          <button className="px-3 py-2 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374] transition" onClick={() => onSave({ temperature: temperature === '' ? undefined : temperature, max_context: maxContext === '' ? undefined : maxContext, max_output_tokens: maxTokens === '' ? undefined : maxTokens, include_settings: include })}>Save</button>
+          <button className="px-3 py-2 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374] transition" onClick={() => onSave({ system_prompt: systemPrompt || undefined, stream, debug, temperature: temperature === '' ? undefined : temperature, max_context: maxContext === '' ? undefined : maxContext, max_output_tokens: maxTokens === '' ? undefined : maxTokens, include_settings: include })}>Save</button>
         </div>
       </div>
     </div>
