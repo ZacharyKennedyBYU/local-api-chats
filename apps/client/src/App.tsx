@@ -82,11 +82,11 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-full bg-neutral-50 text-neutral-900">
-      <aside className="w-64 border-r bg-white p-3 flex flex-col gap-2">
+    <div className="flex h-full bg-[#343541] text-[#ECECF1]">
+      <aside className="w-64 shrink-0 border-r border-[#2A2B32] bg-[#202123] p-3 flex flex-col gap-2">
         <div className="flex items-center justify-between mb-2">
-          <h1 className="font-semibold">Profiles</h1>
-          <button className="text-sm px-2 py-1 rounded bg-neutral-200" onClick={() => {
+          <h1 className="text-sm font-semibold text-[#ECECF1]/80">Profiles</h1>
+          <button className="text-xs px-2 py-1 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374] transition" onClick={() => {
             const name = prompt('Profile name?') || 'New Profile'
             const api_base_url = prompt('API Base URL (e.g. https://api.openai.com)') || ''
             const api_key = prompt('API Key?') || ''
@@ -97,54 +97,60 @@ export default function App() {
         </div>
         <div className="flex flex-col gap-1">
           {profiles.map(p => (
-            <button key={p.id} onClick={() => setActiveProfileId(p.id)} className={`text-left px-2 py-1 rounded ${activeProfileId === p.id ? 'bg-neutral-200' : 'hover:bg-neutral-100'}`}>
-              <div className="font-medium">{p.name}</div>
-              <div className="text-xs text-neutral-500 truncate">{p.api_base_url}</div>
+            <button key={p.id} onClick={() => setActiveProfileId(p.id)} className={`text-left px-2 py-2 rounded-md transition ${activeProfileId === p.id ? 'bg-[#343541] text-[#ECECF1]' : 'hover:bg-[#2A2B32] text-[#ECECF1]/90'}`}>
+              <div className="text-sm font-medium truncate">{p.name}</div>
+              <div className="text-[11px] text-[#8E8EA0] truncate">{p.api_base_url}</div>
             </button>
           ))}
         </div>
       </aside>
       <main className="flex-1 grid grid-rows-[auto_1fr_auto]">
-        <header className="border-b bg-white p-3 flex items-center gap-3">
-          <div className="font-semibold">{activeProfile?.name || 'Select a profile'}</div>
+        <header className="border-b border-[#2A2B32] bg-[#343541] p-3 flex items-center gap-3">
+          <div className="font-medium text-[#ECECF1]/90">{activeProfile?.name || 'Select a profile'}</div>
           <div className="ml-auto flex items-center gap-2 text-sm">
-            <select className="border rounded px-2 py-1 bg-white">
+            <select className="border border-[#565869] rounded-md px-2 py-1 bg-[#40414F] text-[#ECECF1]">
               <option value="">Model (auto)</option>
               {models.map((m, idx) => (
                 <option key={idx} value={m.id || m.name || String(m)}>{m.id || m.name || String(m)}</option>
               ))}
             </select>
-            <button className="px-2 py-1 rounded bg-neutral-200" onClick={() => setSettingsOpen(true)}>Settings</button>
+            <button className="px-2 py-1 rounded-md bg-[#40414F] text-[#ECECF1] border border-[#565869] hover:bg-[#4A4B57] transition" onClick={() => setSettingsOpen(true)}>Settings</button>
           </div>
         </header>
-        <section className="overflow-y-auto p-4 space-y-4">
-          {messages.map((m, idx) => (
-            <div key={idx} className="flex gap-3">
-              <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${m.role === 'assistant' ? 'bg-blue-600 text-white' : 'bg-neutral-300'}`}>{m.role[0].toUpperCase()}</div>
-              <div className="prose max-w-3xl">
-                {m.content && <p>{m.content}</p>}
-                {m.parts?.filter(p => p.type === 'image_url').map((p, i) => (
-                  <img key={i} src={(p as any).image_url.url} alt="uploaded" className="rounded border max-w-sm" />
-                ))}
+        <section className="overflow-y-auto">
+          <div className="mx-auto w-full max-w-3xl">
+            {messages.map((m, idx) => (
+              <div key={idx} className={`${m.role === 'assistant' ? 'bg-[#444654]' : 'bg-transparent'} w-full`}>
+                <div className="px-4 py-6">
+                  <div className="flex items-start gap-4">
+                    <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${m.role === 'assistant' ? 'bg-[#10a37f] text-white' : 'bg-[#40414F] text-[#ECECF1]'}`}>{m.role[0].toUpperCase()}</div>
+                    <div className="min-w-0 flex-1 whitespace-pre-wrap leading-relaxed text-[#ECECF1]">
+                      {m.content && <p>{m.content}</p>}
+                      {m.parts?.filter(p => p.type === 'image_url').map((p, i) => (
+                        <img key={i} src={(p as any).image_url.url} alt="uploaded" className="mt-3 rounded-md border border-[#2A2B32] max-w-sm" />
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </section>
-        <footer className="border-t bg-white p-3">
+        <footer className="border-t border-[#2A2B32] bg-[#343541] p-4">
           <div className="max-w-3xl mx-auto">
             <div className="flex items-end gap-2">
               <div className="flex-1 relative">
-                <textarea value={input} onChange={e => setInput(e.target.value)} className="w-full resize-none rounded border p-3 pr-24" rows={3} placeholder="Message..." />
+                <textarea value={input} onChange={e => setInput(e.target.value)} className="w-full resize-none rounded-2xl border border-[#565869] bg-[#40414F] text-[#ECECF1] placeholder-[#9B9CA8] p-4 pr-28 focus:outline-none focus:ring-1 focus:ring-[#565869]" rows={3} placeholder="Message ChatGPT..." />
                 <div className="absolute right-2 bottom-2 flex items-center gap-2">
                   <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUploadChange} className="hidden" />
-                  <button className="px-2 py-1 text-sm rounded bg-neutral-200" onClick={() => fileInputRef.current?.click()}>Upload</button>
-                  <button className="px-3 py-1 rounded bg-blue-600 text-white" onClick={handleSend}>Send</button>
+                  <button className="px-2 py-1 text-xs rounded-md bg-[#40414F] text-[#ECECF1] border border-[#565869] hover:bg-[#4A4B57] transition" onClick={() => fileInputRef.current?.click()}>Upload</button>
+                  <button className="px-3 py-2 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374] transition" onClick={handleSend}>Send</button>
                 </div>
               </div>
             </div>
             {imageDataUrl && (
-              <div className="mt-2 text-sm text-neutral-600 flex items-center gap-2">
-                <img src={imageDataUrl} className="h-10 w-10 object-cover rounded border" />
+              <div className="mt-2 text-sm text-[#9B9CA8] flex items-center gap-2">
+                <img src={imageDataUrl} className="h-10 w-10 object-cover rounded border border-[#2A2B32]" />
                 <span>Image attached</span>
                 <button className="underline" onClick={() => setImageDataUrl(null)}>remove</button>
               </div>
