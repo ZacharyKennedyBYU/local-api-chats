@@ -26,6 +26,9 @@ app.use('/api/profiles', profilesRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/upload', uploadRouter);
 
+// Backwards-compatible alias without /api prefix
+app.use('/chat', chatRouter);
+
 app.get('/api/health', (_req, res) => {
 	res.json({ ok: true });
 });

@@ -82,7 +82,7 @@ export default function App() {
 
     const debugEnabled = Boolean(profileSettings?.debug)
     if (debugEnabled) {
-      setDebugLogs(prev => [...prev, `[client] POST /api/chat`, JSON.stringify(requestBody, null, 2)])
+      setDebugLogs(prev => [...prev, `[client] POST /chat`, JSON.stringify(requestBody, null, 2)])
     }
 
     if (profileSettings?.stream) {
@@ -90,7 +90,7 @@ export default function App() {
       try {
         // Prepare placeholder assistant message
         setMessages(prev => [...prev, { role: 'assistant', content: '' }])
-        const resp = await fetch(`${API_BASE()}/api/chat`, {
+        const resp = await fetch(`${API_BASE()}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody)
@@ -182,7 +182,7 @@ export default function App() {
     }
 
     // Non-streaming fallback
-    const resp = await fetch(`${API_BASE()}/api/chat`, {
+    const resp = await fetch(`${API_BASE()}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
