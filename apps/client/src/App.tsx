@@ -38,9 +38,26 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (activeProfileId) {
-      fetch(`${API_BASE()}/api/profiles/${activeProfileId}/models`).then(r => r.json()).then(setModels)
+    if (!activeProfileId) return
+    let isCancelled = false
+    async function loadModels() {
+      try {
+        const resp = await fetch(`${API_BASE()}/api/profiles/${activeProfileId}/models`)
+        if (!resp.ok) {
+          // Ensure state remains an array on errors
+          try { await resp.text() } catch {}
+          if (!isCancelled) setModels([])
+          return
+        }
+        const data = await resp.json().catch(() => [])
+        const normalized = Array.isArray(data) ? data : Array.isArray((data as any)?.data) ? (data as any).data : []
+        if (!isCancelled) setModels(normalized)
+      } catch {
+        if (!isCancelled) setModels([])
+      }
     }
+    loadModels()
+    return () => { isCancelled = true }
   }, [activeProfileId])
 
   const activeProfile = useMemo(() => profiles.find(p => p.id === activeProfileId) || null, [profiles, activeProfileId])
