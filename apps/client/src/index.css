@@ -10,4 +10,10 @@ html, body, #root {
 
 body {
   font-family: var(--font-sans);
+  background-color: #343541;
+  color: #ECECF1;
+}
+
+html {
+  color-scheme: dark;
 }
