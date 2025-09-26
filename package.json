@@ -1,0 +1,31 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,green \"npm run -w apps/server dev\" \"npm run -w apps/client dev\"",
+    "build": "npm run -w apps/server build && npm run -w apps/client build",
+    "start": "npm run -w apps/server start",
+    "lint": "echo 'No linter configured'",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZacharyKennedyBYU/local-api-chats.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ZacharyKennedyBYU/local-api-chats/issues"
+  },
+  "homepage": "https://github.com/ZacharyKennedyBYU/local-api-chats#readme",
+  "description": "",
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
