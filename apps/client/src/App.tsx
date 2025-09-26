@@ -33,6 +33,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [profileSettings, setProfileSettings] = useState<any>({})
   const [debugLogs, setDebugLogs] = useState<string[]>([])
+  const [selectedModel, setSelectedModel] = useState<string>('')
 
   useEffect(() => {
     fetch(`${API_BASE()}/api/profiles`).then(r => r.json()).then(setProfiles)
@@ -58,8 +59,16 @@ export default function App() {
       }
     }
     loadModels()
+    setSelectedModel('')
     return () => { isCancelled = true }
   }, [activeProfileId])
+
+  useEffect(() => {
+    if (!selectedModel && Array.isArray(models) && models.length > 0) {
+      const first = models[0]
+      setSelectedModel(first?.id || first?.name || String(first))
+    }
+  }, [models, selectedModel])
 
   const activeProfile = useMemo(() => profiles.find(p => p.id === activeProfileId) || null, [profiles, activeProfileId])
 
@@ -75,7 +84,7 @@ export default function App() {
     const requestBody = {
       profileId: activeProfileId,
       conversationId: conversationId ?? undefined,
-      model: undefined,
+      model: selectedModel || undefined,
       messages: [...messages, outgoing].map(m => ({ role: m.role, content: m.content, parts: m.parts })),
       params: profileSettings || {}
     }
@@ -231,7 +240,7 @@ export default function App() {
         <header className="border-b border-[#2A2B32] bg-[#343541] p-3 flex items-center gap-3">
           <div className="font-medium text-[#ECECF1]/90">{activeProfile?.name || 'Select a profile'}</div>
           <div className="ml-auto flex items-center gap-2 text-sm">
-            <select className="border border-[#565869] rounded-md px-2 py-1 bg-[#40414F] text-[#ECECF1]">
+            <select className="border border-[#565869] rounded-md px-2 py-1 bg-[#40414F] text-[#ECECF1]" value={selectedModel} onChange={e => setSelectedModel(e.target.value)}>
               <option value="">Model (auto)</option>
               {models.map((m, idx) => (
                 <option key={idx} value={m.id || m.name || String(m)}>{m.id || m.name || String(m)}</option>

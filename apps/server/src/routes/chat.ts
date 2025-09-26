@@ -117,11 +117,9 @@ chatRouter.post('/', async (req, res) => {
 	const reqBody: any = buildRequestBody({
 		model: model || merged.model,
 		messages: apiMessages,
-		max_context: merged.max_context,
 		max_tokens: merged.max_output_tokens,
 		temperature: merged.temperature,
 		top_p: merged.top_p,
-		top_k: merged.top_k,
 		frequency_penalty: merged.frequency_penalty,
 		presence_penalty: merged.presence_penalty,
 		stream: merged.stream
@@ -151,9 +149,11 @@ chatRouter.post('/', async (req, res) => {
 		// If streaming requested, proxy as SSE to the client
 		if (merged.stream) {
 			if (!upstreamResp.ok || !upstreamResp.body) {
-				const text = await upstreamResp.text().catch(() => '');
-				res.status(upstreamResp.status).json({ error: text || 'Upstream error' });
-				return;
+				const raw = await upstreamResp.text().catch(() => '');
+				let parsedErr: any = null;
+				try { parsedErr = raw ? JSON.parse(raw) : null; } catch {}
+				const payload = (parsedErr && (parsedErr.error || parsedErr)) || raw || 'Upstream error';
+				return res.status(upstreamResp.status).json({ error: payload, ...(merged.debug ? { debug: { url, body: reqBody } } : {}) });
 			}
 
 			// Prepare conversation and persist user messages up-front
@@ -241,8 +241,11 @@ chatRouter.post('/', async (req, res) => {
 
 		// Non-streaming path
 		if (!upstreamResp.ok) {
-			const text = await upstreamResp.text();
-			return res.status(upstreamResp.status).json({ error: text });
+			const raw = await upstreamResp.text().catch(() => '');
+			let parsedErr: any = null;
+			try { parsedErr = raw ? JSON.parse(raw) : null; } catch {}
+			const payload = (parsedErr && (parsedErr.error || parsedErr)) || raw || 'Upstream error';
+			return res.status(upstreamResp.status).json({ error: payload, ...(merged.debug ? { debug: { url, body: reqBody } } : {}) });
 		}
 		const data = await upstreamResp.json();
 
