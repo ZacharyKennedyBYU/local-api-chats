@@ -82,8 +82,10 @@ profilesRouter.get('/:id/models', async (req, res) => {
 	if (!profile) return res.status(404).json({ error: 'Not found' });
 
 	try {
-		const base = String(profile.api_base_url).replace(/\/$/, '');
-		const url = `${base}/v1/models`;
+		// Normalize base URL so we do not duplicate version segments
+		const base = String(profile.api_base_url).replace(/\/+$/, '');
+		const alreadyVersioned = /\/(v\d+|openai\/v\d+)$/.test(base);
+		const url = `${base}${alreadyVersioned ? '' : '/v1'}/models`;
 		const resp = await fetch(url, {
 			headers: {
 				'Authorization': `Bearer ${profile.api_key}`,
@@ -94,9 +96,15 @@ profilesRouter.get('/:id/models', async (req, res) => {
 			const text = await resp.text();
 			return res.status(resp.status).json({ error: text });
 		}
-		const data = await resp.json();
-		// Support both OpenAI schema {data: [...]} and direct array
-		const models = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+		const data = await resp.json().catch(() => null);
+		// Support common schemas: direct array, {data: [...]}, {models: [...]}
+		const models = Array.isArray(data)
+			? data
+			: Array.isArray((data as any)?.data)
+				? (data as any).data
+				: Array.isArray((data as any)?.models)
+					? (data as any).models
+					: [];
 		res.json(models);
 	} catch (e: any) {
 		res.status(500).json({ error: e?.message || 'Failed to fetch models' });
