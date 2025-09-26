@@ -19,7 +19,7 @@ export async function listModels(profileId: number) {
 }
 
 export async function sendChat(body: any) {
-  const r = await fetch(`${apiBase()}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const r = await fetch(`${apiBase()}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   return r.json()
 }
 
