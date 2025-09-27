@@ -5,6 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { profilesRouter } from './routes/profiles';
 import { chatRouter } from './routes/chat';
+import { conversationsRouter } from './routes/conversations';
+import { messagesRouter } from './routes/messages';
 import { uploadRouter } from './routes/upload';
 import { ensureDatabaseInitialized } from './lib/db';
 
@@ -24,6 +26,8 @@ ensureDatabaseInitialized();
 
 app.use('/api/profiles', profilesRouter);
 app.use('/api/chat', chatRouter);
+app.use('/api/conversations', conversationsRouter);
+app.use('/api/messages', messagesRouter);
 app.use('/api/upload', uploadRouter);
 
 // Backwards-compatible alias without /api prefix

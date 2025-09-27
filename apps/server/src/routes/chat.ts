@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { getDb } from '../lib/db';
 import { ProfileRow } from '../lib/types';
@@ -56,7 +56,7 @@ function buildRequestBody(base: any, include: Record<string, boolean> | undefine
 	return filtered;
 }
 
-chatRouter.post('/', async (req, res) => {
+chatRouter.post('/', async (req: Request, res: Response) => {
 	const parsed = ChatRequest.safeParse(req.body);
 	if (!parsed.success) {
 		return res.status(400).json({ error: parsed.error.flatten() });
@@ -125,6 +125,41 @@ chatRouter.post('/', async (req, res) => {
 		stream: merged.stream
 	}, include);
 
+	async function generateConversationTitle(args: { baseUrl: string; apiKey: string; model: string | undefined; userText: string }): Promise<string | null> {
+		const { baseUrl, apiKey, model, userText } = args;
+		const candidatePaths = ['/chat/completions', '/completions'];
+		const sys = 'You are a helpful assistant that writes concise chat titles. Return 3-6 words, no quotes, no punctuation at the end.';
+		const prompt = `Write a short descriptive title for this chat based on the user's first message. Only return the title.\n\nMessage: ${userText.slice(0, 500)}`;
+		for (const suffix of candidatePaths) {
+			const url = `${baseUrl}${suffix}`;
+			try {
+				const body: any = suffix.includes('chat')
+					? { model, messages: [{ role: 'system', content: sys }, { role: 'user', content: prompt }], max_tokens: 16, temperature: 0.5 }
+					: { model, prompt: `${sys}\n\n${prompt}\n\nTitle:`, max_tokens: 16, temperature: 0.5 };
+				const resp = await fetch(url, {
+					method: 'POST',
+					headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+					body: JSON.stringify(body)
+				});
+				if (!resp.ok) continue;
+				const data = await resp.json().catch(() => null);
+				let title = '';
+				if (Array.isArray(data?.choices) && data.choices.length > 0) {
+					const choice = data.choices[0];
+					if (typeof choice?.message?.content === 'string') title = choice.message.content;
+					else if (typeof choice?.text === 'string') title = choice.text;
+				}
+				title = String(title || '').trim();
+				if (title) {
+					// sanitize: remove surrounding quotes and excessive length
+					title = title.replace(/^\s*["'\u201C\u201D]|["'\u201C\u201D]\s*$/g, '').slice(0, 80);
+					return title;
+				}
+			} catch {}
+		}
+		return null;
+	}
+
 	try {
 		// Try common OpenAI-compatible endpoints, falling back if the first 404s
 		const candidatePaths = ['/chat/completions', '/completions'];
@@ -159,16 +194,16 @@ chatRouter.post('/', async (req, res) => {
 			// Prepare conversation and persist user messages up-front
 			let convId = conversationId as number | undefined;
 			if (!convId) {
-				const firstUser = messages.find(m => m.role === 'user');
-				const title = (firstUser?.content || '').slice(0, 80) || 'New Chat';
 				const info = db.prepare('INSERT INTO conversations (profile_id, title, model) VALUES (?, ?, ?)')
-					.run(profileId, title, reqBody.model ?? null);
+					.run(profileId, 'New Chat', reqBody.model ?? null);
 				convId = Number(info.lastInsertRowid);
 			}
 			const insertMsg = db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)');
 			for (const m of messages) {
-				insertMsg.run(convId!, m.role, m.content);
+				insertMsg.run(convId!, m.role, m.content ?? '');
 			}
+			// bump updated_at
+			db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(convId!);
 
 			// SSE headers
 			res.setHeader('Content-Type', 'text/event-stream');
@@ -235,6 +270,19 @@ chatRouter.post('/', async (req, res) => {
 			// Save assistant message and finish
 			const insertAssistant = db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)');
 			insertAssistant.run(convId!, 'assistant', assistantText);
+			// bump updated_at
+			db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(convId!);
+
+			// Try to auto-title the conversation using the first user message
+			try {
+				const firstUser = messages.find(m => m.role === 'user');
+				const baseForTitle = `${rawBaseUrl}${alreadyVersioned ? '' : '/v1'}`;
+				const title = firstUser?.content ? await generateConversationTitle({ baseUrl: baseForTitle, apiKey, model: reqBody.model, userText: firstUser.content }) : null;
+				if (title) {
+					db.prepare('UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(title, convId!);
+					send('title', { title });
+				}
+			} catch {}
 			send('done', { conversationId: convId });
 			return res.end();
 		}
@@ -252,16 +300,14 @@ chatRouter.post('/', async (req, res) => {
 		// Persist conversation and messages
 		let convId = conversationId;
 		if (!convId) {
-			const firstUser = messages.find(m => m.role === 'user');
-			const title = (firstUser?.content || '').slice(0, 80) || 'New Chat';
 			const info = db.prepare('INSERT INTO conversations (profile_id, title, model) VALUES (?, ?, ?)')
-				.run(profileId, title, reqBody.model ?? null);
+				.run(profileId, 'New Chat', reqBody.model ?? null);
 			convId = Number(info.lastInsertRowid);
 		}
 		// Insert incoming user messages in request
 		const insertMsg = db.prepare('INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)');
 		for (const m of messages) {
-			insertMsg.run(convId, m.role, m.content);
+			insertMsg.run(convId, m.role, m.content ?? '');
 		}
 		// Extract assistant message
 		let assistant = '';
@@ -273,6 +319,18 @@ chatRouter.post('/', async (req, res) => {
 			}
 		}
 		insertMsg.run(convId, 'assistant', assistant);
+		// bump updated_at
+		db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(convId);
+
+		// Auto-title
+		try {
+			const firstUser = messages.find((m: any) => m.role === 'user');
+			const baseForTitle = `${rawBaseUrl}${alreadyVersioned ? '' : '/v1'}`;
+			const title = firstUser?.content ? await generateConversationTitle({ baseUrl: baseForTitle, apiKey, model: reqBody.model, userText: firstUser.content }) : null;
+			if (title) {
+				db.prepare('UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(title, convId);
+			}
+		} catch {}
 
 		res.json({ conversationId: convId, response: data });
 	} catch (e: any) {
