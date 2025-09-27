@@ -15,6 +15,14 @@ type ChatMessage = {
   parts?: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
 }
 
+type Conversation = {
+  id: number
+  profile_id: number
+  title: string | null
+  model: string | null
+  updated_at: string
+}
+
 const API_BASE = () => {
   const url = new URL(window.location.href)
   // server runs on 3001 by default
@@ -34,9 +42,13 @@ export default function App() {
   const [profileSettings, setProfileSettings] = useState<any>({})
   const [debugLogs, setDebugLogs] = useState<string[]>([])
   const [selectedModel, setSelectedModel] = useState<string>('')
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
+  const [editingContent, setEditingContent] = useState<string>('')
 
   useEffect(() => {
     fetch(`${API_BASE()}/api/profiles`).then(r => r.json()).then(setProfiles)
+    fetch(`${API_BASE()}/api/conversations`).then(r => r.json()).then(setConversations)
   }, [])
 
   useEffect(() => {
@@ -71,6 +83,36 @@ export default function App() {
   }, [models, selectedModel])
 
   const activeProfile = useMemo(() => profiles.find(p => p.id === activeProfileId) || null, [profiles, activeProfileId])
+
+  async function refreshConversations() {
+    const rows = await fetch(`${API_BASE()}/api/conversations`).then(r => r.json()).catch(() => [])
+    if (Array.isArray(rows)) setConversations(rows)
+  }
+
+  async function loadConversation(id: number) {
+    try {
+      const r = await fetch(`${API_BASE()}/api/conversations/${id}/messages`)
+      if (!r.ok) return
+      const data = await r.json()
+      const conv = data.conversation as Conversation
+      const msgs = (data.messages as any[]).map(m => ({ id: m.id, role: m.role, content: m.content })) as ChatMessage[]
+      setConversationId(conv.id)
+      setMessages(msgs)
+      setActiveProfileId(conv.profile_id)
+      setSelectedModel(conv.model || '')
+    } catch {}
+  }
+
+  async function refreshMessages(currentId: number | null) {
+    if (!currentId) return
+    try {
+      const r = await fetch(`${API_BASE()}/api/conversations/${currentId}/messages`)
+      if (!r.ok) return
+      const data = await r.json()
+      const msgs = (data.messages as any[]).map((m: any) => ({ id: m.id, role: m.role, content: m.content })) as ChatMessage[]
+      setMessages(msgs)
+    } catch {}
+  }
 
   async function handleSend() {
     if (!activeProfileId) return
@@ -126,6 +168,7 @@ export default function App() {
         const decoder = new TextDecoder()
         let buffer = ''
         let finished = false
+        let streamingConvId: number | null = conversationId
 
         const processBuffer = () => {
           let sepIndex: number
@@ -144,8 +187,14 @@ export default function App() {
             if (eventName === 'meta') {
               try {
                 const obj = JSON.parse(dataStr)
-                if (obj?.conversationId) setConversationId(obj.conversationId)
+                if (obj?.conversationId) {
+                  setConversationId(obj.conversationId)
+                  streamingConvId = obj.conversationId
+                }
               } catch {}
+            } else if (eventName === 'title') {
+              // simply refresh conversations to pick up the new title from server
+              void refreshConversations()
             } else if (eventName === 'debug') {
               // already logged raw above
             } else if (eventName === 'chunk') {
@@ -183,6 +232,9 @@ export default function App() {
         if (buffer) {
           processBuffer()
         }
+        // After stream completes, refresh conversation list and messages to get ids and title
+        await refreshConversations()
+        await refreshMessages(conversationId)
       } catch (e: any) {
         if (debugEnabled) setDebugLogs(prev => [...prev, `[client] stream error`, String(e?.message || e)])
         setMessages(prev => [...prev, { role: 'assistant', content: 'Error: stream interrupted.' }])
@@ -201,6 +253,8 @@ export default function App() {
     setConversationId(data.conversationId)
     const assistant = data?.response?.choices?.[0]?.message?.content
     setMessages(prev => [...prev, { role: 'assistant', content: typeof assistant === 'string' ? assistant : '' }])
+    await refreshConversations()
+    await refreshMessages(data.conversationId)
   }
 
   function handleUploadChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -213,33 +267,79 @@ export default function App() {
     reader.readAsDataURL(file)
   }
 
+  function startNewChat() {
+    setConversationId(null)
+    setMessages([])
+  }
+
+  async function handleDeleteConversation(id: number) {
+    await fetch(`${API_BASE()}/api/conversations/${id}`, { method: 'DELETE' })
+    await refreshConversations()
+    if (conversationId === id) {
+      setConversationId(null)
+      setMessages([])
+    }
+  }
+
+  function beginEditMessage(m: ChatMessage) {
+    if (!m.id) return
+    setEditingMessageId(m.id)
+    setEditingContent(m.content || '')
+  }
+
+  async function saveEditMessage() {
+    if (!editingMessageId) return
+    await fetch(`${API_BASE()}/api/messages/${editingMessageId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: editingContent }) })
+    setEditingMessageId(null)
+    setEditingContent('')
+    await refreshMessages(conversationId)
+    await refreshConversations()
+  }
+
+  async function deleteMessage(id?: number) {
+    if (!id) return
+    await fetch(`${API_BASE()}/api/messages/${id}`, { method: 'DELETE' })
+    await refreshMessages(conversationId)
+    await refreshConversations()
+  }
+
   return (
     <div className="flex h-full bg-[#343541] text-[#ECECF1]">
       <aside className="w-64 shrink-0 border-r border-[#2A2B32] bg-[#202123] p-3 flex flex-col gap-2">
         <div className="flex items-center justify-between mb-2">
-          <h1 className="text-sm font-semibold text-[#ECECF1]/80">Profiles</h1>
-          <button className="text-xs px-2 py-1 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374] transition" onClick={() => {
-            const name = prompt('Profile name?') || 'New Profile'
-            const api_base_url = prompt('API Base URL (e.g. https://api.openai.com)') || ''
-            const api_key = prompt('API Key?') || ''
-            fetch(`${API_BASE()}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, api_base_url, api_key }) })
-              .then(r => r.json())
-              .then(() => fetch(`${API_BASE()}/api/profiles`).then(r => r.json()).then(setProfiles))
-          }}>Add</button>
+          <h1 className="text-sm font-semibold text-[#ECECF1]/80">Chats</h1>
+          <button className="text-xs px-2 py-1 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374] transition" onClick={startNewChat}>New</button>
         </div>
         <div className="flex flex-col gap-1">
-          {profiles.map(p => (
-            <button key={p.id} onClick={() => setActiveProfileId(p.id)} className={`text-left px-2 py-2 rounded-md transition ${activeProfileId === p.id ? 'bg-[#343541] text-[#ECECF1]' : 'hover:bg-[#2A2B32] text-[#ECECF1]/90'}`}>
-              <div className="text-sm font-medium truncate">{p.name}</div>
-              <div className="text-[11px] text-[#8E8EA0] truncate">{p.api_base_url}</div>
-            </button>
+          {conversations.map(c => (
+            <div key={c.id} className={`group flex items-center gap-2 ${conversationId === c.id ? 'bg-[#343541] text-[#ECECF1]' : 'hover:bg-[#2A2B32] text-[#ECECF1]/90'} rounded-md`}>
+              <button onClick={() => loadConversation(c.id)} className="flex-1 text-left px-2 py-2 truncate">
+                <div className="text-sm font-medium truncate">{c.title || 'New Chat'}</div>
+              </button>
+              <button className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 text-[#8E8EA0] hover:text-red-400" onClick={() => handleDeleteConversation(c.id)}>Delete</button>
+            </div>
           ))}
         </div>
       </aside>
       <main className="flex-1 grid grid-rows-[auto_1fr_auto]">
-        <header className="border-b border-[#2A2B32] bg-[#343541] p-3 flex items-center gap-3">
-          <div className="font-medium text-[#ECECF1]/90">{activeProfile?.name || 'Select a profile'}</div>
-          <div className="ml-auto flex items-center gap-2 text-sm">
+        <header className="border-b border-[#2A2B32] bg-[#343541] p-3 grid grid-cols-3 items-center">
+          <div />
+          <div className="justify-self-center flex items-center gap-2">
+            <select className="border border-[#565869] rounded-md px-2 py-1 bg-[#40414F] text-[#ECECF1] min-w-[220px]" value={activeProfileId ?? ''} onChange={e => setActiveProfileId(e.target.value === '' ? null : Number(e.target.value))}>
+              <option value="">Select a profile</option>
+              {profiles.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button className="text-xs px-2 py-1 rounded-md bg-[#40414F] text-[#ECECF1] border border-[#565869] hover:bg-[#4A4B57]" onClick={() => {
+              const name = prompt('Profile name?') || 'New Profile'
+              const api_base_url = prompt('API Base URL (e.g. https://api.openai.com)') || ''
+              const api_key = prompt('API Key?') || ''
+              fetch(`${API_BASE()}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, api_base_url, api_key }) })
+                .then(() => fetch(`${API_BASE()}/api/profiles`).then(r => r.json()).then(setProfiles))
+            }}>Add</button>
+          </div>
+          <div className="justify-self-end flex items-center gap-2 text-sm">
             <select className="border border-[#565869] rounded-md px-2 py-1 bg-[#40414F] text-[#ECECF1]" value={selectedModel} onChange={e => setSelectedModel(e.target.value)}>
               <option value="">Model (auto)</option>
               {models.map((m, idx) => (
@@ -257,10 +357,28 @@ export default function App() {
                   <div className="flex items-start gap-4">
                     <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${m.role === 'assistant' ? 'bg-[#10a37f] text-white' : 'bg-[#40414F] text-[#ECECF1]'}`}>{m.role[0].toUpperCase()}</div>
                     <div className="min-w-0 flex-1 whitespace-pre-wrap leading-relaxed text-[#ECECF1]">
-                      {m.content && <p>{m.content}</p>}
-                      {m.parts?.filter(p => p.type === 'image_url').map((p, i) => (
-                        <img key={i} src={(p as any).image_url.url} alt="uploaded" className="mt-3 rounded-md border border-[#2A2B32] max-w-sm" />
-                      ))}
+                      {editingMessageId === m.id ? (
+                        <div className="space-y-2">
+                          <textarea value={editingContent} onChange={e => setEditingContent(e.target.value)} rows={3} className="w-full resize-none rounded-md border border-[#565869] bg-[#40414F] text-[#ECECF1] p-2 focus:outline-none focus:ring-1 focus:ring-[#565869]" />
+                          <div className="flex items-center gap-2 text-sm">
+                            <button className="px-2 py-1 rounded-md bg-[#10a37f] text-white hover:bg-[#15b374]" onClick={saveEditMessage}>Save</button>
+                            <button className="px-2 py-1 rounded-md border border-[#565869] bg-[#40414F] hover:bg-[#4A4B57]" onClick={() => { setEditingMessageId(null); setEditingContent('') }}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {m.content && <p>{m.content}</p>}
+                          {m.parts?.filter(p => p.type === 'image_url').map((p, i) => (
+                            <img key={i} src={(p as any).image_url.url} alt="uploaded" className="mt-3 rounded-md border border-[#2A2B32] max-w-sm" />
+                          ))}
+                          {m.id && (
+                            <div className="mt-2 text-xs text-[#9B9CA8] flex items-center gap-3 opacity-70">
+                              <button className="underline" onClick={() => beginEditMessage(m)}>Edit</button>
+                              <button className="underline" onClick={() => deleteMessage(m.id)}>Delete</button>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
